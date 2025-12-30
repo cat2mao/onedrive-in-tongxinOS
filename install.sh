@@ -23,19 +23,15 @@ fi
 echo "🔍 正在检查 Rclone..."
 if ! command -v rclone &> /dev/null; then
     echo "⚠️  未检测到 rclone，正在尝试自动安装..."
-    
-    # 尝试使用 apt 安装 (统信/Deepin/Ubuntu)
     echo ">>> 正在执行: sudo apt update && sudo apt install rclone"
     sudo apt update && sudo apt install -y rclone
     
-    # 如果 apt 安装失败，尝试官方脚本
     if ! command -v rclone &> /dev/null; then
         echo "⚠️  Apt 安装失败或版本过低，尝试使用官方脚本安装..."
         if ! command -v curl &> /dev/null; then sudo apt install -y curl; fi
         curl https://rclone.org/install.sh | sudo bash
     fi
     
-    # 最终检查
     if ! command -v rclone &> /dev/null; then
         echo "❌ Rclone 安装失败，请手动安装后重试。"
         exit 1
@@ -45,7 +41,6 @@ fi
 
 # 3. 检查配置
 echo "🔍 正在检查 Rclone 配置..."
-# 检查是否存在名为 OneDrive 的配置
 if ! rclone listremotes | grep -q "OneDrive:"; then
     echo "⚠️  未检测到名为 'OneDrive' 的远程配置。"
     echo "-----------------------------------------------------"
@@ -58,7 +53,6 @@ if ! rclone listremotes | grep -q "OneDrive:"; then
     echo "按回车键开始配置..."
     read
     rclone config
-    # 再次检查
     if ! rclone listremotes | grep -q "OneDrive:"; then
         echo "❌ 配置未成功或名称错误（必须叫 OneDrive），安装终止。"
         exit 1
@@ -75,19 +69,16 @@ sudo apt install -y python3-gi gir1.2-appindicator3-0.1 gir1.2-gtk-3.0
 # 5. 部署文件
 echo "📂 正在部署文件..."
 
-# 创建目录
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$ICONS_DIR"
 mkdir -p "$SYSTEMD_DIR"
 mkdir -p "$APP_DIR"
 mkdir -p "$USER_HOME/.cache"
-mkdir -p "$USER_HOME/OneDrive"  # 创建本地同步目录
+mkdir -p "$USER_HOME/OneDrive" 
 
-# 复制 Python 脚本
 cp "$(dirname "$0")/rclone-tray.py" "$INSTALL_DIR/rclone-tray.py"
 chmod +x "$INSTALL_DIR/rclone-tray.py"
 
-# 生成图标
 echo "🎨 生成图标..."
 cat > "$ICONS_DIR/idle.svg" <<EOF
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#0078D4"/></svg>
@@ -96,13 +87,12 @@ cat > "$ICONS_DIR/syncing.svg" <<EOF
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#E3E3E3"/><path d="M32 24v-4l-6 6 6 6v-4c4.4 0 8 3.6 8 8s-3.6 8-8 8-8-3.6-8-8h-4c0 6.6 5.4 12 12 12s12-5.4 12-12-5.4-12-12-12z" fill="#0078D4"/></svg>
 EOF
 cat > "$ICONS_DIR/failed.svg" <<EOF
-<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#E3E3E3"/><circle cx="48" cy="48" r="14" fill="#D13438"/><path d="M46 40h4v10h-4zm0 12h4v4h-4z" fill="#FFFFFF"/></svg>
+<svg width="64" height="64" viewBox="0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#E3E3E3"/><circle cx="48" cy="48" r="14" fill="#D13438"/><path d="M46 40h4v10h-4zm0 12h4v4h-4z" fill="#FFFFFF"/></svg>
 EOF
 cat > "$ICONS_DIR/offline.svg" <<EOF
-<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#A0A0A0"/><line x1="10" y1="54" x2="54" y2="10" stroke="#FFFFFF" stroke-width="4"/></svg>
+<svg width="64" height="64" viewBox="0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#A0A0A0"/><line x1="10" y1="54" x2="54" y2="10" stroke="#FFFFFF" stroke-width="4"/></svg>
 EOF
 
-# 生成 Systemd Service
 echo "⚙️  配置后台服务..."
 cat > "$SYSTEMD_DIR/rclone-onedrive.service" <<EOF
 [Unit]
@@ -124,7 +114,6 @@ RemainAfterExit=no
 WantedBy=default.target
 EOF
 
-# 生成 Systemd Timer
 cat > "$SYSTEMD_DIR/rclone-onedrive.timer" <<EOF
 [Unit]
 Description=Run Rclone OneDrive BiSync every 30 minutes
@@ -138,7 +127,6 @@ Unit=rclone-onedrive.service
 WantedBy=timers.target
 EOF
 
-# 生成 Desktop 文件 (开始菜单)
 echo "🖥️  创建开始菜单快捷方式..."
 cat > "$APP_DIR/rclone-onedrive.desktop" <<EOF
 [Desktop Entry]
@@ -153,7 +141,6 @@ StartupNotify=false
 EOF
 chmod +x "$APP_DIR/rclone-onedrive.desktop"
 
-# 生成 Desktop 图标 (用户桌面)
 echo "🖥️  创建桌面图标..."
 if [ -d "$DESKTOP_DIR" ]; then
     cp "$APP_DIR/rclone-onedrive.desktop" "$DESKTOP_DIR/"
@@ -163,9 +150,7 @@ else
     echo "⚠️  未找到桌面目录 $DESKTOP_DIR，跳过桌面图标创建。"
 fi
 
-# 6. 配置日志轮转 (需要 Root)
 echo "📜 配置日志自动清理..."
-# 创建临时文件
 cat > /tmp/rclone-onedrive-logrotate <<EOF
 $USER_HOME/.cache/rclone-onedrive.log {
     daily
@@ -179,12 +164,10 @@ EOF
 sudo mv /tmp/rclone-onedrive-logrotate /etc/logrotate.d/rclone-onedrive
 sudo chown root:root /etc/logrotate.d/rclone-onedrive
 
-# 7. 启动服务
 echo "🚀 启动服务中..."
 systemctl --user daemon-reload
 systemctl --user enable --now rclone-onedrive.timer
 
-# 设置开机自启托盘
 mkdir -p "$USER_HOME/.config/autostart"
 cp "$APP_DIR/rclone-onedrive.desktop" "$USER_HOME/.config/autostart/"
 
