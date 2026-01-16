@@ -1,6 +1,6 @@
 #!/bin/bash
 # make_installer.sh
-# 运行此脚本，将在桌面生成最终的安装包文件夹
+# 修复版：自动忽略根目录下的文件（防止 PDF 等文件导致崩溃）
 
 # 1. 定义输出目录
 INSTALLER_DIR="$HOME/Desktop/OneDrive-Tray-Installer"
@@ -9,10 +9,10 @@ mkdir -p "$INSTALLER_DIR/assets"
 echo "正在生成安装包到: $INSTALLER_DIR"
 
 # =========================================================
-# 2. 写入 Python 主程序 (嵌入支持微调框和打钩状态的最新代码)
+# 2. 写入 Python 主程序 (rclone-tray.py)
 # =========================================================
 cat > "$INSTALLER_DIR/rclone-tray.py" << 'EOF_PYTHON'
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import gi
 import os
 import subprocess
@@ -45,12 +45,13 @@ LOG_FILE = os.path.join(USER_HOME, ".cache/rclone-onedrive.log")
 SERVICE_FILE = os.path.join(USER_HOME, ".config/systemd/user/rclone-onedrive.service")
 TIMER_FILE = os.path.join(USER_HOME, ".config/systemd/user/rclone-onedrive.timer")
 RCLONE_CONF = os.path.join(USER_HOME, ".config/rclone/rclone.conf")
+LAUNCHER_SCRIPT = os.path.join(USER_HOME, ".local/bin/rclone-launcher.py")
+
 SERVICE_NAME = "rclone-onedrive.service"
 TIMER_NAME = "rclone-onedrive.timer"
 LOCAL_DIR = os.path.join(USER_HOME, "OneDrive")
 
 last_status_code = "INIT"
-# 用于防止初始化菜单时触发回调
 is_initializing = True 
 
 # ================== 工具函数 ==================
@@ -97,7 +98,6 @@ def syncing_progress():
     except: pass
     return "正在启动同步..."
 
-# ================== 配置读取函数 ==================
 def get_current_interval():
     if not os.path.exists(TIMER_FILE): return 30
     try:
@@ -110,11 +110,9 @@ def get_current_interval():
     return 30
 
 def get_current_fixed_time():
-    """ 读取当前的固定时间设置 """
     if not os.path.exists(TIMER_FILE): return None
     try:
         with open(TIMER_FILE, 'r') as f: content = f.read()
-        # 匹配 OnCalendar=*-*-* 17:20:00
         match = re.search(r"OnCalendar=\*-\*-\*\s+(\d{2}:\d{2}):00", content)
         if match:
             return match.group(1)
@@ -133,14 +131,13 @@ def action_restart_all(_):
         subprocess.run(["/usr/bin/systemctl", "--user", "daemon-reload"], stderr=subprocess.DEVNULL)
         subprocess.Popen(["/usr/bin/systemctl", "--user", "restart", SERVICE_NAME])
         subprocess.Popen(["/usr/bin/systemctl", "--user", "restart", TIMER_NAME])
-        python = sys.executable
+        python = "/usr/bin/python3"
         subprocess.Popen([python] + sys.argv)
         Gtk.main_quit()
         sys.exit(0)
     except Exception as e:
         send_notification("错误", f"重启失败: {e}", True)
 
-# --- 间隔同步逻辑 ---
 def set_timer_interval(minutes):
     if not os.path.exists(TIMER_FILE):
         send_notification("错误", "找不到 Timer 文件", True); return
@@ -162,13 +159,10 @@ def set_timer_interval(minutes):
     except Exception as e:
         send_notification("失败", f"无法写入文件: {e}", True)
 
-# --- 固定时间逻辑 (改进版：使用 SpinButton 和 CheckMenuItem) ---
 def show_time_picker_dialog(current_time=None):
-    """ 弹出带有微调框的时间选择对话框 """
     dialog = Gtk.Dialog(title="设置定时同步", parent=None, flags=0)
     dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
     
-    # 默认时间
     def_h, def_m = 17, 20
     if current_time:
         try:
@@ -177,115 +171,67 @@ def show_time_picker_dialog(current_time=None):
         except: pass
 
     box = dialog.get_content_area()
-    box.set_spacing(10)
-    box.set_border_width(20)
+    box.set_spacing(10); box.set_border_width(20)
+    box.add(Gtk.Label(label="请选择每天同步的时间："))
     
-    label = Gtk.Label(label="请选择每天同步的时间：")
-    box.add(label)
-    
-    # 创建水平布局放 H : M
     hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
     hbox.set_halign(Gtk.Align.CENTER)
     
-    # 小时微调框 (0-23)
     adj_h = Gtk.Adjustment(value=def_h, lower=0, upper=23, step_increment=1, page_increment=1, page_size=0)
-    spin_h = Gtk.SpinButton(adjustment=adj_h)
-    spin_h.set_numeric(True)
-    spin_h.set_wrap(True) # 循环
+    spin_h = Gtk.SpinButton(adjustment=adj_h); spin_h.set_numeric(True); spin_h.set_wrap(True)
     hbox.pack_start(spin_h, False, False, 0)
-    
-    # 冒号
-    sep = Gtk.Label(label=" : ")
-    hbox.pack_start(sep, False, False, 0)
-    
-    # 分钟微调框 (0-59)
+    hbox.pack_start(Gtk.Label(label=" : "), False, False, 0)
     adj_m = Gtk.Adjustment(value=def_m, lower=0, upper=59, step_increment=1, page_increment=10, page_size=0)
-    spin_m = Gtk.SpinButton(adjustment=adj_m)
-    spin_m.set_numeric(True)
-    spin_m.set_wrap(True) # 循环
+    spin_m = Gtk.SpinButton(adjustment=adj_m); spin_m.set_numeric(True); spin_m.set_wrap(True)
     hbox.pack_start(spin_m, False, False, 0)
     
-    box.add(hbox)
-    box.show_all()
-    
+    box.add(hbox); box.show_all()
     response = dialog.run()
-    
     result = None
     if response == Gtk.ResponseType.OK:
-        # 获取整数并格式化为 HH:MM
-        h = int(spin_h.get_value())
-        m = int(spin_m.get_value())
-        result = f"{h:02d}:{m:02d}"
-        
+        result = f"{int(spin_h.get_value()):02d}:{int(spin_m.get_value()):02d}"
     dialog.destroy()
     return result
 
 def on_fixed_time_toggled(widget):
-    """ 复选框回调 """
     global is_initializing
     if is_initializing: return
-
     is_active = widget.get_active()
-    
     if is_active:
-        # 用户尝试启用 -> 弹出对话框选择时间
         current = get_current_fixed_time()
         time_str = show_time_picker_dialog(current)
-        
         if time_str:
-            # 用户选好了时间 -> 写入配置
             update_fixed_time_config(time_str)
             widget.set_label(f"每天定时同步 ({time_str})")
         else:
-            # 用户点了取消 -> 恢复未勾选状态 (需屏蔽信号防止死循环)
             widget.handler_block_by_func(on_fixed_time_toggled)
             widget.set_active(False)
             widget.handler_unblock_by_func(on_fixed_time_toggled)
-            
     else:
-        # 用户尝试禁用 -> 直接清除配置
         update_fixed_time_config(None)
         widget.set_label("每天定时同步")
 
-
 def update_fixed_time_config(time_str):
     if not os.path.exists(TIMER_FILE): return
-    
     try:
         with open(TIMER_FILE, 'r') as f: content = f.read()
-        
         has_calendar = "OnCalendar=" in content
-        
         if time_str:
-            # 添加/更新
             new_line = f"OnCalendar=*-*-* {time_str}:00"
-            # 确保 Persistent 存在
             if "Persistent=" not in content:
-                 if "[Timer]" in content:
-                     content = content.replace("[Timer]", f"[Timer]\nPersistent=true")
-            
-            if has_calendar:
-                new_content = re.sub(r"OnCalendar=.*", new_line, content)
-            else:
-                new_content = content.replace("[Timer]", f"[Timer]\n{new_line}")
+                 if "[Timer]" in content: content = content.replace("[Timer]", f"[Timer]\nPersistent=true")
+            if has_calendar: new_content = re.sub(r"OnCalendar=.*", new_line, content)
+            else: new_content = content.replace("[Timer]", f"[Timer]\n{new_line}")
             msg = f"已设置每天 {time_str} 同步"
         else:
-            # 删除
-            if has_calendar:
-                new_content = re.sub(r"OnCalendar=.*\n?", "", content)
-                msg = "已取消固定时间同步"
-            else:
-                return 
-
+            if has_calendar: new_content = re.sub(r"OnCalendar=.*\n?", "", content); msg = "已取消固定时间同步"
+            else: return 
         with open(TIMER_FILE, 'w') as f: f.write(new_content)
-        
         subprocess.run(["/usr/bin/systemctl", "--user", "daemon-reload"])
         subprocess.run(["/usr/bin/systemctl", "--user", "restart", TIMER_NAME])
         send_notification("设置成功", msg)
-        
     except Exception as e:
         send_notification("失败", f"配置错误: {e}", True)
-
 
 def edit_file(filepath):
     if not os.path.exists(filepath): send_notification("错误", f"文件不存在", True); return
@@ -296,10 +242,13 @@ def edit_file(filepath):
 
 def force_resync(_):
     dialog = Gtk.MessageDialog(parent=None, flags=0, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.OK_CANCEL, text="确定要强制重置同步吗？")
-    dialog.format_secondary_text("这会执行 --resync，仅在报错 'lock file' 时使用。")
+    dialog.format_secondary_text("注意：全量扫描可能会比较慢。\n这会调用 Launcher 自动更新配置并执行 --resync。")
     if dialog.run() == Gtk.ResponseType.OK:
         send_notification("系统", "正在执行强制重置...", True)
-        subprocess.Popen(["/usr/bin/rclone", "bisync", "OneDrive:", LOCAL_DIR, "--resync", "--verbose", "--log-file", LOG_FILE])
+        try:
+            subprocess.Popen(["/usr/bin/python3", LAUNCHER_SCRIPT, "--resync"])
+        except Exception as e:
+            send_notification("错误", f"调用 Launcher 失败: {e}", True)
     dialog.destroy()
 
 def open_actions(action):
@@ -311,11 +260,10 @@ def quit_app(_):
     Gtk.main_quit(); sys.exit(0)
 
 def on_interval_toggled(widget, mins):
-    # 防止初始化时触发
     if is_initializing: return
     if widget.get_active(): set_timer_interval(mins)
 
-# ================== UI 构建 ==================
+# UI 构建
 indicator = AppIndicator3.Indicator.new("rclone-onedrive", os.path.join(ICON_DIR, "idle.svg"), AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
 indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
 menu = Gtk.Menu()
@@ -325,12 +273,7 @@ menu.append(Gtk.SeparatorMenuItem())
 item_sync = Gtk.MenuItem(label="立即双向同步"); item_sync.connect("activate", manual_sync); menu.append(item_sync)
 item_folder = Gtk.MenuItem(label="打开本地文件夹"); item_folder.connect("activate", lambda _: open_actions("local")); menu.append(item_folder)
 
-# --- 自动同步设置子菜单 ---
-item_timer_menu = Gtk.MenuItem(label="⏱️ 自动同步设置"); 
-menu_timer_submenu = Gtk.Menu(); 
-item_timer_menu.set_submenu(menu_timer_submenu)
-
-# 1. 间隔设置 (单选)
+item_timer_menu = Gtk.MenuItem(label="⏱️ 自动同步设置"); menu_timer_submenu = Gtk.Menu(); item_timer_menu.set_submenu(menu_timer_submenu)
 item_label_1 = Gtk.MenuItem(label="--- 间隔频率 ---"); item_label_1.set_sensitive(False); menu_timer_submenu.append(item_label_1)
 intervals = [("10 分钟", 10), ("30 分钟", 30), ("1 小时", 60), ("2 小时", 120), ("4 小时", 240)]
 curr = get_current_interval(); grp = None
@@ -339,29 +282,12 @@ for lbl, m in intervals:
     if grp is None: grp = itm
     if m == curr: itm.set_active(True)
     itm.connect("toggled", on_interval_toggled, m); menu_timer_submenu.append(itm)
-
 menu_timer_submenu.append(Gtk.SeparatorMenuItem())
 
-# 2. 固定时间设置 (复选 + 微调框)
 item_label_2 = Gtk.MenuItem(label="--- 每天定时 ---"); item_label_2.set_sensitive(False); menu_timer_submenu.append(item_label_2)
-
-# 读取状态
-curr_fixed = get_current_fixed_time() # 返回 "17:20" 或 None
-
-# 创建复选菜单项
-if curr_fixed:
-    fixed_label = f"每天定时同步 ({curr_fixed})"
-    item_fixed = Gtk.CheckMenuItem(label=fixed_label)
-    item_fixed.set_active(True)
-else:
-    fixed_label = "每天定时同步"
-    item_fixed = Gtk.CheckMenuItem(label=fixed_label)
-    item_fixed.set_active(False)
-
-# 连接信号
-item_fixed.connect("toggled", on_fixed_time_toggled)
-menu_timer_submenu.append(item_fixed)
-
+curr_fixed = get_current_fixed_time()
+fixed_label = f"每天定时同步 ({curr_fixed})" if curr_fixed else "每天定时同步"
+item_fixed = Gtk.CheckMenuItem(label=fixed_label); item_fixed.set_active(bool(curr_fixed)); item_fixed.connect("toggled", on_fixed_time_toggled); menu_timer_submenu.append(item_fixed)
 menu.append(item_timer_menu)
 
 item_restart = Gtk.MenuItem(label="重启程序与服务 (全量重载)"); item_restart.connect("activate", action_restart_all); menu.append(item_restart)
@@ -384,9 +310,7 @@ item_time = Gtk.MenuItem(label="上次同步：未知"); item_time.set_sensitive
 menu.append(Gtk.SeparatorMenuItem())
 item_quit = Gtk.MenuItem(label="退出"); item_quit.connect("activate", quit_app); menu.append(item_quit)
 
-# 标记初始化完成，允许信号触发
 is_initializing = False
-
 menu.show_all(); indicator.set_menu(menu)
 
 def update_ui_immediate(): update_ui_logic()
@@ -420,7 +344,95 @@ Gtk.main()
 EOF_PYTHON
 
 # =========================================================
-# 3. 写入安装脚本 (install.sh) - 保持不变
+# 3. 写入 动态启动器 (rclone-launcher.py) - 【新增后缀过滤】
+# =========================================================
+cat > "$INSTALLER_DIR/rclone-launcher.py" << 'EOF_LAUNCHER'
+#!/usr/bin/python3
+import os
+import subprocess
+import sys
+import configparser
+
+RCLONE_CONF_PATH = os.path.expanduser("~/.config/rclone/rclone.conf")
+LOCAL_ROOT = os.path.expanduser("~/OneDrive")
+REMOTE_NAME = "OneDrive"
+DYNAMIC_REMOTE = "OneDriveAuto"
+IGNORE_DIRS = ["个人保管库", "Personal Vault"]
+# 【新增】自动忽略的文件后缀，防止文件被误当成目录挂载导致崩溃
+IGNORE_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.jpg', '.png', '.txt', '.zip', '.rar', '.7z']
+
+def get_cloud_dirs():
+    try:
+        result = subprocess.check_output(["rclone", "lsd", f"{REMOTE_NAME}:"], stderr=subprocess.DEVNULL).decode().strip()
+        dirs = []
+        for line in result.splitlines():
+            parts = line.split()
+            if len(parts) >= 5:
+                dirname = " ".join(parts[4:])
+                dirs.append(dirname)
+        return dirs
+    except: return []
+
+def get_local_dirs():
+    if not os.path.exists(LOCAL_ROOT): os.makedirs(LOCAL_ROOT); return []
+    try:
+        return [d for d in os.listdir(LOCAL_ROOT) if os.path.isdir(os.path.join(LOCAL_ROOT, d)) and not d.startswith(".")]
+    except: return []
+
+def update_rclone_conf(dirs):
+    config = configparser.ConfigParser()
+    config.read(RCLONE_CONF_PATH)
+    upstreams_list = []
+    for d in dirs:
+        upstreams_list.append(f"{d}={REMOTE_NAME}:{d}")
+    upstreams_str = " ".join(upstreams_list)
+    if not config.has_section(DYNAMIC_REMOTE): config.add_section(DYNAMIC_REMOTE)
+    config.set(DYNAMIC_REMOTE, "type", "combine")
+    config.set(DYNAMIC_REMOTE, "upstreams", upstreams_str)
+    with open(RCLONE_CONF_PATH, 'w') as f: config.write(f)
+
+def main():
+    print(">>> 正在扫描目录结构...")
+    cloud_dirs = set(get_cloud_dirs())
+    local_dirs = set(get_local_dirs())
+    all_dirs = cloud_dirs.union(local_dirs)
+    valid_dirs = []
+    
+    for d in all_dirs:
+        # 1. 过滤绝对黑名单
+        if d in IGNORE_DIRS:
+            print(f"--- 已忽略(黑名单): {d}")
+            continue
+        # 2. 【新增】过滤文件后缀
+        _, ext = os.path.splitext(d)
+        if ext.lower() in IGNORE_EXTENSIONS:
+            print(f"--- 已忽略(文件): {d}")
+            continue
+            
+        valid_dirs.append(d)
+    
+    print(f"+++ 将同步以下文件夹: {valid_dirs}")
+    update_rclone_conf(valid_dirs)
+    
+    cmd = [
+        "rclone", "bisync", f"{DYNAMIC_REMOTE}:", LOCAL_ROOT,
+        "--fast-list", "--transfers", "16", "--checkers", "16",
+        "--multi-thread-streams", "8", "--tpslimit", "10",
+        "--stats", "2s", "--exclude", ".xdg-volume-info",
+        "--log-file", os.path.expanduser("~/.cache/rclone-onedrive.log"),
+        "--log-level", "INFO", "--ignore-listing-checksum"
+    ]
+    cmd.extend(sys.argv[1:])
+    print(f">>> 执行: {' '.join(cmd)}")
+    sys.stdout.flush()
+    os.execvp("rclone", cmd)
+
+if __name__ == "__main__":
+    main()
+EOF_LAUNCHER
+
+# =========================================================
+# 4. 写入安装脚本
 # =========================================================
 cat > "$INSTALLER_DIR/install.sh" << 'EOF_INSTALL'
 #!/bin/bash
@@ -429,7 +441,6 @@ echo "=========================================="
 echo "    OneDrive 托盘程序一键安装脚本"
 echo "=========================================="
 
-# 1. 检查基础环境
 CURRENT_USER=$(whoami)
 USER_HOME=$HOME
 INSTALL_DIR="$USER_HOME/.local/bin"
@@ -439,70 +450,40 @@ APP_DIR="$USER_HOME/.local/share/applications"
 DESKTOP_DIR="$USER_HOME/Desktop"
 
 if [ "$EUID" -eq 0 ]; then
-  echo "❌ 请不要使用 sudo 运行此脚本，直接运行即可。"
-  echo "   脚本内部会在需要时请求 sudo 权限。"
+  echo "❌ 请不要使用 sudo 运行此脚本。"
   exit 1
 fi
 
-# 2. 检查并自动安装 Rclone
 echo "🔍 正在检查 Rclone..."
 if ! command -v rclone &> /dev/null; then
     echo "⚠️  未检测到 rclone，正在尝试自动安装..."
-    echo ">>> 正在执行: sudo apt update && sudo apt install rclone"
     sudo apt update && sudo apt install -y rclone
-    
     if ! command -v rclone &> /dev/null; then
-        echo "⚠️  Apt 安装失败或版本过低，尝试使用官方脚本安装..."
+        echo "⚠️  Apt 安装失败，尝试使用官方脚本..."
         if ! command -v curl &> /dev/null; then sudo apt install -y curl; fi
         curl https://rclone.org/install.sh | sudo bash
     fi
-    
-    if ! command -v rclone &> /dev/null; then
-        echo "❌ Rclone 安装失败，请手动安装后重试。"
-        exit 1
-    fi
-    echo "✅ Rclone 安装成功！"
 fi
 
-# 3. 检查配置
 echo "🔍 正在检查 Rclone 配置..."
 if ! rclone listremotes | grep -q "OneDrive:"; then
-    echo "⚠️  未检测到名为 'OneDrive' 的远程配置。"
-    echo "-----------------------------------------------------"
-    echo ">>> 即将进入 Rclone 配置向导 <<<"
-    echo "1. 输入 'n' 新建配置"
-    echo "2. name 输入: OneDrive (必须完全一致)"
-    echo "3. storage 类型搜索 'onedrive' 并选择"
-    echo "4. 按提示登录即可"
-    echo "-----------------------------------------------------"
-    echo "按回车键开始配置..."
-    read
+    echo ">>> 请按照向导配置，Name 必须为: OneDrive"
+    read -p "按回车键开始配置..."
     rclone config
-    if ! rclone listremotes | grep -q "OneDrive:"; then
-        echo "❌ 配置未成功或名称错误（必须叫 OneDrive），安装终止。"
-        exit 1
-    fi
-else
-    echo "✅ 检测到 OneDrive 配置。"
 fi
 
-# 4. 安装依赖
 echo "📦 正在安装 Python 依赖..."
 sudo apt update
 sudo apt install -y python3-gi gir1.2-appindicator3-0.1 gir1.2-gtk-3.0
 
-# 5. 部署文件
 echo "📂 正在部署文件..."
-
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$ICONS_DIR"
-mkdir -p "$SYSTEMD_DIR"
-mkdir -p "$APP_DIR"
-mkdir -p "$USER_HOME/.cache"
-mkdir -p "$USER_HOME/OneDrive" 
+mkdir -p "$INSTALL_DIR" "$ICONS_DIR" "$SYSTEMD_DIR" "$APP_DIR" "$USER_HOME/.cache" "$USER_HOME/OneDrive" 
 
 cp "$(dirname "$0")/rclone-tray.py" "$INSTALL_DIR/rclone-tray.py"
 chmod +x "$INSTALL_DIR/rclone-tray.py"
+
+cp "$(dirname "$0")/rclone-launcher.py" "$INSTALL_DIR/rclone-launcher.py"
+chmod +x "$INSTALL_DIR/rclone-launcher.py"
 
 echo "🎨 生成图标..."
 cat > "$ICONS_DIR/idle.svg" <<EOF
@@ -512,16 +493,17 @@ cat > "$ICONS_DIR/syncing.svg" <<EOF
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#E3E3E3"/><path d="M32 24v-4l-6 6 6 6v-4c4.4 0 8 3.6 8 8s-3.6 8-8 8-8-3.6-8-8h-4c0 6.6 5.4 12 12 12s12-5.4 12-12-5.4-12-12-12z" fill="#0078D4"/></svg>
 EOF
 cat > "$ICONS_DIR/failed.svg" <<EOF
-<svg width="64" height="64" viewBox="0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#E3E3E3"/><circle cx="48" cy="48" r="14" fill="#D13438"/><path d="M46 40h4v10h-4zm0 12h4v4h-4z" fill="#FFFFFF"/></svg>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#E3E3E3"/><circle cx="48" cy="48" r="14" fill="#D13438"/><path d="M46 40h4v10h-4zm0 12h4v4h-4z" fill="#FFFFFF"/></svg>
 EOF
 cat > "$ICONS_DIR/offline.svg" <<EOF
-<svg width="64" height="64" viewBox="0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#A0A0A0"/><line x1="10" y1="54" x2="54" y2="10" stroke="#FFFFFF" stroke-width="4"/></svg>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path d="M49.6 22.4c0-6.6-5.4-12-12-12-5 0-9.2 3.1-11.1 7.4C25.3 16.6 23.7 16 22 16c-5.5 0-10 4.5-10 10 0 0.8 0.1 1.6 0.3 2.3-5.1 1.4-8.3 6-8.3 11.3 0 6.6 5.4 12 12 12h33.6c6.6 0 12-5.4 12-12 0-6.5-5.2-11.8-11.6-12H49.6z" fill="#A0A0A0"/><line x1="10" y1="54" x2="54" y2="10" stroke="#FFFFFF" stroke-width="4"/></svg>
 EOF
 
-echo "⚙️  配置后台服务..."
+echo "⚙️  配置后台服务 (使用 Launcher)..."
+# 使用 /usr/bin/python3 显式调用 Launcher
 cat > "$SYSTEMD_DIR/rclone-onedrive.service" <<EOF
 [Unit]
-Description=Rclone OneDrive BiSync (10min via timer)
+Description=Rclone OneDrive BiSync (Dynamic)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -530,7 +512,7 @@ StartLimitBurst=5
 [Service]
 Type=oneshot
 ExecStartPre=/bin/bash -c 'echo SYNCING > %h/.cache/rclone-onedrive.status'
-ExecStart=$(which rclone) bisync "OneDrive:" "%h/OneDrive" --exclude "个人保管库/**" --exclude ".xdg-volume-info" --fast-list --transfers 16 --checkers 16 --multi-thread-streams 8 --tpslimit 10 --stats 2s --log-file %h/.cache/rclone-onedrive.log --log-level INFO
+ExecStart=/usr/bin/python3 $INSTALL_DIR/rclone-launcher.py
 ExecStopPost=/bin/bash -c 'if [ "\$EXIT_STATUS" = "0" ]; then echo "IDLE" > %h/.cache/rclone-onedrive.status; else echo "FAILED" > %h/.cache/rclone-onedrive.status; fi'
 TimeoutStartSec=0
 RemainAfterExit=no
@@ -552,13 +534,14 @@ Unit=rclone-onedrive.service
 WantedBy=timers.target
 EOF
 
-echo "🖥️  创建开始菜单快捷方式..."
+echo "🖥️  创建桌面快捷方式..."
+# 强制使用 /usr/bin/python3
 cat > "$APP_DIR/rclone-onedrive.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=OneDrive 同步助手
 Comment=Rclone OneDrive 托盘管理程序
-Exec=$(which python3) $INSTALL_DIR/rclone-tray.py
+Exec=/usr/bin/python3 $INSTALL_DIR/rclone-tray.py
 Icon=$ICONS_DIR/idle.svg
 Terminal=false
 Categories=Utility;Network;
@@ -566,13 +549,9 @@ StartupNotify=false
 EOF
 chmod +x "$APP_DIR/rclone-onedrive.desktop"
 
-echo "🖥️  创建桌面图标..."
 if [ -d "$DESKTOP_DIR" ]; then
     cp "$APP_DIR/rclone-onedrive.desktop" "$DESKTOP_DIR/"
     chmod +x "$DESKTOP_DIR/rclone-onedrive.desktop"
-    echo "✅ 桌面图标已创建。"
-else
-    echo "⚠️  未找到桌面目录 $DESKTOP_DIR，跳过桌面图标创建。"
 fi
 
 echo "📜 配置日志自动清理..."
@@ -597,27 +576,23 @@ mkdir -p "$USER_HOME/.config/autostart"
 cp "$APP_DIR/rclone-onedrive.desktop" "$USER_HOME/.config/autostart/"
 
 echo "=========================================="
-echo "✅ 安装完成！"
-echo "1. 后台同步服务已启动。"
-echo "2. 桌面已生成 'OneDrive 同步助手' 图标。"
-echo "3. 请双击桌面图标启动程序。"
+echo "✅ 安装完成！请双击桌面 'OneDrive 同步助手'。"
 echo "=========================================="
 EOF_INSTALL
 chmod +x "$INSTALLER_DIR/install.sh"
 
 # =========================================================
-# 4. 写入卸载脚本 (uninstall.sh)
+# 5. 写入卸载脚本
 # =========================================================
 cat > "$INSTALLER_DIR/uninstall.sh" << 'EOF_UNINSTALL'
 #!/bin/bash
 echo "⚠️  正在卸载 OneDrive 托盘程序..."
-
 systemctl --user stop rclone-onedrive.timer
 systemctl --user stop rclone-onedrive.service
 systemctl --user disable rclone-onedrive.timer
 systemctl --user disable rclone-onedrive.service
-
 rm -f ~/.local/bin/rclone-tray.py
+rm -f ~/.local/bin/rclone-launcher.py
 rm -rf ~/.local/share/icons/rclone
 rm -f ~/.config/systemd/user/rclone-onedrive.service
 rm -f ~/.config/systemd/user/rclone-onedrive.timer
@@ -626,16 +601,12 @@ rm -f ~/.config/autostart/rclone-onedrive.desktop
 rm -f ~/Desktop/rclone-onedrive.desktop
 rm -f ~/.cache/rclone-onedrive.status
 rm -f ~/.cache/rclone_tray.lock
-
 echo "正在删除日志配置 (需要 sudo)..."
 sudo rm -f /etc/logrotate.d/rclone-onedrive
-
 systemctl --user daemon-reload
-
 echo "✅ 卸载完成。"
 EOF_UNINSTALL
 chmod +x "$INSTALLER_DIR/uninstall.sh"
 
 echo "✅ 安装包生成成功！"
 echo "位置: $INSTALLER_DIR"
-echo "请将该文件夹妥善保存。重装系统后，进入该文件夹运行 ./install.sh 即可。"
